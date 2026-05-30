@@ -1,0 +1,58 @@
+#!/bin/sh
+# PID 1 for the NAND installer initramfs. Brings up a USB RNDIS gadget so
+# the host can reach it, then starts dropbear and drops to a serial shell.
+
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+
+mount -t proc     proc   /proc
+mount -t sysfs    sys    /sys
+mount -t devtmpfs dev    /dev     2>/dev/null || true
+mkdir -p /dev/pts
+mount -t devpts   devpts /dev/pts 2>/dev/null || true
+mount -t configfs none   /sys/kernel/config
+
+# Compose a single RNDIS function. Needs the kernel built with
+# USB_CONFIGFS + USB_CONFIGFS_RNDIS + USB_MUSB_GADGET/SUNXI (the separate
+# x-chip-linux-deb change). If usb0 never appears, that config is missing.
+G=/sys/kernel/config/usb_gadget/g1
+mkdir -p "$G"
+echo 0x1f3a > "$G/idVendor"
+echo 0xefe8 > "$G/idProduct"
+mkdir -p "$G/strings/0x409"
+echo 0001           > "$G/strings/0x409/serialnumber"
+echo NTC            > "$G/strings/0x409/manufacturer"
+echo CHIP-installer > "$G/strings/0x409/product"
+mkdir -p "$G/configs/c.1/strings/0x409"
+echo rndis > "$G/configs/c.1/strings/0x409/configuration"
+mkdir -p "$G/functions/rndis.usb0"
+# Pin both MACs so the host can recognise this NIC by a fixed address
+# (dev_addr = our usb0, host_addr = the MAC the host side gets). flash.sh
+# matches GADGET_HOST_MAC against host_addr.
+echo de:ad:be:ef:53:01 > "$G/functions/rndis.usb0/dev_addr"
+echo de:ad:be:ef:53:02 > "$G/functions/rndis.usb0/host_addr"
+ln -s "$G/functions/rndis.usb0" "$G/configs/c.1/"
+
+# bind to the first available USB device controller
+ls /sys/class/udc > "$G/UDC" || echo "WARN: no UDC found - gadget not bound"
+
+sleep 1
+ip addr add 192.168.81.1/24 dev usb0 && ip link set usb0 up \
+  || echo "WARN: usb0 not present - check kernel gadget config"
+
+# DHCP server so the host auto-addresses the gadget NIC. Suppress the
+# router (opt 3) and DNS (opt 6) options so we never hijack the host's
+# default route or resolver; --port=0 disables dnsmasq's DNS entirely.
+mkdir -p /run
+dnsmasq \
+  --interface=usb0 --bind-interfaces \
+  --dhcp-range=192.168.81.10,192.168.81.20,255.255.255.0,1h \
+  --dhcp-option=3 --dhcp-option=6 \
+  --port=0 --user=root \
+  --dhcp-leasefile=/run/dnsmasq.leases --pid-file=/run/dnsmasq.pid \
+  || echo "WARN: dnsmasq failed to start"
+
+# ssh control channel (-R: generate host keys on first start)
+dropbear -R
+
+echo "=== CHIP NAND installer ready (ssh root@192.168.81.1) ==="
+exec /bin/sh
