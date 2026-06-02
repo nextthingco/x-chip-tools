@@ -3,13 +3,20 @@
 # build the "live image" to install from
 # minimal debian with a few things and
 # hardcocded ssh keys
+#
+# this script + its sibling assets (init, installer_key*) are COPYed into the
+# docker image (see Dockerfile); the output lands in $OUT, which the Makefile
+# bind-mounts to the host's build/ dir.
 
-HERE=$PWD
-ROOT=build/initramfs-root
+HERE=$(cd "$(dirname "$0")" && pwd)   # the asset dir baked into the image
+OUT=${OUT:-$HERE/build}
+ROOT="$OUT/initramfs-root"
 SUITE=trixie
 
-rm -rf build
-mkdir -p build
+# clean only our own products -- $OUT may be a bind-mount point, so don't
+# remove the dir itself.
+rm -rf "$ROOT" "$OUT/initramfs.cpio.gz" "$OUT/initrd.uimage"
+mkdir -p "$OUT"
 
 # minimal rootfs with flashing utilities
 debootstrap --arch=armhf --variant=minbase \
@@ -35,11 +42,12 @@ rm -rf \
   "$ROOT"/usr/bin/qemu-*-static
 
 # pack as gzip cpio, then wrap as a uboot ramdisk
-( cd "$ROOT" && find . | cpio -o -H newc ) | gzip -9 > build/initramfs.cpio.gz
+( cd "$ROOT" && find . | cpio -o -H newc ) | gzip -9 > "$OUT/initramfs.cpio.gz"
 mkimage -A arm -O linux -T ramdisk -C gzip \
   -n "chip-nand-installer" \
-  -d build/initramfs.cpio.gz \
-  build/initrd.uimage
+  -d "$OUT/initramfs.cpio.gz" \
+  "$OUT/initrd.uimage"
 
-# chown build
-[ -n "${HOST_UID:-}" ] && chown -R "$HOST_UID:$HOST_GID" "$HERE/build" || true
+# hand the build outputs back to the invoking host user (HOST_UID/GID from
+# the Makefile), so they aren't root-owned.
+[ -n "${HOST_UID:-}" ] && chown -R "$HOST_UID:$HOST_GID" "$OUT" || true

@@ -8,3 +8,9 @@ RUN apt-get update \
        cpio \
        gzip \
        u-boot-tools
+
+# the initramfs build assets (build script, init, installer keys) live in
+# assets/ and are baked into the container; the build writes to $OUT, which
+# the Makefile bind-mounts to the host build/ dir.
+COPY assets/ /opt/assets/
+WORKDIR /opt/assets
