@@ -124,6 +124,8 @@ wait_for_device() {
 # mtd4 per the kernel NAND device tree (SPL=0, SPL.backup=1, U-Boot=2,
 # env=3, rootfs=4).
 install_rootfs() {
+  # git doesn't preserve permissions on clone, chmod 0600 it
+  chmod og-rw "$KEY"
   local ssh="ssh -i $KEY -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@$DEV_IP"
 
   # Format + mount in ONE ssh session. dropbear in a tiny initramfs handles a
