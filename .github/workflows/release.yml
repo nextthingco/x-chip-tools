@@ -14,6 +14,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Register qemu binfmt handlers on the runner so the armhf debootstrap can
+      # execute arm binaries via qemu-user-static (the host kernel does the
+      # interpreting; a fresh runner has no handler registered otherwise).
+      - name: Enable arm emulation
+        uses: docker/setup-qemu-action@v3
+
       # `make` builds the amd64 container and debootstraps the armhf installer
       # initramfs with qemu-user-static, dropping build/initrd.uimage.
       - name: Build installer initrd
