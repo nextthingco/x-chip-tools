@@ -78,16 +78,24 @@ mk_uboot_script() {
   rm -f "$tmp"
 }
 
-# pull zImage + nand dtb out of the -chip kernel .deb -> $ZIMAGE, $DTB
+# The installer boots on the SAME -chip kernel that's in the rootfs (apt-installed
+# during the live-build), so pull zImage + nand dtb straight out of $ROOTFS_TAR
+# -> $ZIMAGE, $DTB. No separate kernel artifact needed. Override ZIMAGE/DTB to
+# boot a different installer kernel.
 resolve_kernel() {
-  KERNEL_DEB=${KERNEL_DEB:-$(ls -1 ../x-chip-linux-deb/build/linux-image-*-chip_*.deb 2>/dev/null | head -1)}
   if [ -z "${ZIMAGE:-}" ] || [ -z "${DTB:-}" ]; then
-    [ -n "$KERNEL_DEB" ] || { echo "no -chip kernel .deb found; set ZIMAGE and DTB" >&2; exit 1; }
     rm -rf build/kernel && mkdir -p build/kernel
-    dpkg -x "$KERNEL_DEB" build/kernel
+    local z=; case "$ROOTFS_TAR" in *.gz) z=z ;; esac
+    # tar stores paths as ./boot/... (build.sh packs with `-C binary .`).
+    tar -C build/kernel "-x${z}f" "$ROOTFS_TAR" --wildcards \
+        './boot/vmlinuz-*-chip' \
+        './boot/dtbs/*/sun5i-r8-chip.dtb' \
+        './usr/lib/linux-image-*/sun5i-r8-chip.dtb' 2>/dev/null || true
   fi
-  ZIMAGE=${ZIMAGE:-$(ls -1 build/kernel/boot/vmlinuz-*-chip | head -1)}
-  DTB=${DTB:-$(find build/kernel -name sun5i-r8-chip.dtb | head -1)}
+  ZIMAGE=${ZIMAGE:-$(ls -1 build/kernel/boot/vmlinuz-*-chip 2>/dev/null | head -1)}
+  DTB=${DTB:-$(find build/kernel -name sun5i-r8-chip.dtb 2>/dev/null | head -1)}
+  [ -n "$ZIMAGE" ] && [ -n "$DTB" ] || {
+    echo "could not extract installer kernel+dtb from $ROOTFS_TAR; set ZIMAGE and DTB" >&2; exit 1; }
 }
 
 # wait for the gadget nic (by pinned mac), then for the device to ping.
@@ -128,7 +136,12 @@ ubidetach -m 4 2>/dev/null || true      # in case of a re-run
 ubiformat /dev/mtd4 -y
 ubiattach -m 4
 ubimkvol /dev/ubi0 --name rootfs -m     # -m: take all available space
-mkfs.ubifs /dev/ubi0_0                   # so U-Boot can mount it too
+mkfs.ubifs /dev/ubi0_0
+# mkfs.ubifs -x zlib                     # zlib: best ratio (fewest NAND reads on a
+                                         # storage-bound board) AND readable by
+                                         # u-boot, which mounts this to load the
+                                         # kernel/dtb. NOT zstd: u-boot's ubifs has
+                                         # no zstd decompressor -> superblock -EINVAL.
 mkdir -p /rootfs
 mount -t ubifs /dev/ubi0_0 /rootfs
 REMOTE
