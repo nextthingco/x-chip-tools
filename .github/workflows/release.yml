@@ -1,0 +1,33 @@
+name: release-installer
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create releases / upload assets
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `make` builds the amd64 container and debootstraps the armhf installer
+      # initramfs with qemu-user-static, dropping build/initrd.uimage.
+      - name: Build installer initrd
+        run: make
+
+      - name: Compute version tag
+        id: ver
+        run: echo "tag=installer-$(date -u +'%Y.%m.%d-%H%M%S')" >> "$GITHUB_OUTPUT"
+
+      # update.sh fetches just initrd.uimage from this repo's latest release.
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: ${{ steps.ver.outputs.tag }}
+          files: build/initrd.uimage
+          make_latest: true
