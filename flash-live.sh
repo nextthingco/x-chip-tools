@@ -2,11 +2,11 @@
 
 # one-shot NAND flash over FEL + gadget-eth: rewrite SPL+u-boot, boot the
 # installer, then format + stream the rootfs. no serial needed.
-#   ./flash.sh <rootfs.tar[.gz]>
+#   ./flash-live.sh <rootfs.tar[.gz]>
 
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 
-ROOTFS_TAR=${1:?usage: flash.sh <rootfs.tar[.gz]>}
+ROOTFS_TAR=${1:?usage: flash-live.sh <rootfs.tar[.gz]>}
 
 UBOOT=${UBOOT:-../x-chip-uboot/build/u-boot/u-boot-sunxi-with-spl.bin}
 INITRD=${INITRD:-build/initrd.uimage}
@@ -15,68 +15,12 @@ GADGET_HOST_MAC=${GADGET_HOST_MAC:-de:ad:be:ef:53:02}   # matches init's host_ad
 DEV_IP=${DEV_IP:-192.168.81.1}
 BOOTARGS=${BOOTARGS:-'console=ttyS0,115200'}            # partitions come from the DT
 
-# DRAM staging addresses for the bootloader blobs, clear of the installer
-# payload (zImage 0x42000000, dtb 0x43000000, boot.scr 0x43100000,
-# initrd 0x43300000 +~30MiB) and u-boot's own 0x4A000000.
-SPLNAND_ADDR=0x46000000
-UBOOT_ADDR=0x47000000
-
-# build the BROM-formatted SPL image (one erase block of SPL copies) and the
-# padded u-boot -> $SPLNAND, $UBOOTPAD; sets $PAGES_PER_EB.
-build_bootloader_images() {
-  local work=$1
-
-  : "${UBOOT_DIR:=../x-chip-uboot/build/u-boot}"
-  : "${SPL:=$UBOOT_DIR/spl/sunxi-spl.bin}"
-  : "${UBOOT_BIN:=$UBOOT_DIR/u-boot-dtb.bin}"
-  : "${SNIB:=sunxi-nand-image-builder}"
-  # Hynix 8G MLC geometry (this CHIP's NAND). Override for other parts.
-  : "${PAGE:=16384}" "${OOB:=1664}" "${EB:=4194304}"
-
-  rm -rf "$work"; mkdir -p "$work"
-
-  # The BROM probes pages 0/64/128/192 of each erase block, so fill a whole
-  # erase block with SPL copies, each padded out to 64 pages.
-  local one="$work/spl-one.nand"
-  SPLNAND="$work/spl.nand"
-  $SNIB -c 64/1024 -p "$PAGE" -o "$OOB" -u 1024 -e "$EB" -b -s "$SPL" "$one"
-  local one_pages=$(( $(stat -c%s "$one") / (PAGE + OOB) ))
-  local pad_pages=$(( 64 - one_pages ))
-  local copies=$(( EB / PAGE / 64 ))
-  : > "$SPLNAND"
-  local i
-  for ((i = 0; i < copies; i++)); do
-    dd if=/dev/urandom of="$work/pad" bs=1024 count="$pad_pages" status=none
-    $SNIB -c 64/1024 -p "$PAGE" -o "$OOB" -u 1024 -e "$EB" -b -s "$work/pad" "$work/pad.nand"
-    cat "$one" "$work/pad.nand" >> "$SPLNAND"
-  done
-
-  UBOOTPAD="$work/uboot.bin"
-  dd if="$UBOOT_BIN" of="$UBOOTPAD" bs="$EB" conv=sync status=none
-
-  PAGES_PER_EB=$(printf '0x%x' $(( EB / PAGE )))
-}
-
-# u-boot commands to erase the 16MiB boot region and write SPL(+backup)+u-boot,
-# leaving the rootfs UBI partition (>= 0x1000000) untouched.
-bootloader_write_cmds() {
-  cat <<EOF
-echo == writing CHIP bootloader to NAND ==
-nand erase 0x0 0x1000000
-nand write.raw.noverify $SPLNAND_ADDR 0x0 $PAGES_PER_EB
-nand write.raw.noverify $SPLNAND_ADDR 0x400000 $PAGES_PER_EB
-nand write $UBOOT_ADDR 0x800000 0x400000
-EOF
-}
-
-# wrap u-boot commands (read from stdin) into a bootable script image
-mk_uboot_script() {
-  local out=$1 tmp
-  tmp=$(mktemp)
-  cat > "$tmp"
-  mkimage -A arm -O linux -T script -C none -n chip-nand -d "$tmp" "$out" >/dev/null
-  rm -f "$tmp"
-}
+# Shared bootloader-image helpers (per-NAND SPL build, NAND-type detection,
+# boot-script wrapper) + the DRAM staging addresses they FEL-load to. Installer
+# payload lives below them: zImage 0x42000000, dtb 0x43000000, boot.scr
+# 0x43100000, initrd 0x43300000 (+~30MiB); SPL/u-boot at 0x46/0x47/0x48; all
+# clear of u-boot's own >= 0x4A000000.
+source "$HERE/lib-nand.sh"
 
 # The installer boots on the SAME -chip kernel that's in the rootfs (apt-installed
 # during the live-build), so pull zImage + nand dtb straight out of $ROOTFS_TAR
@@ -188,8 +132,11 @@ REMOTE
 resolve_kernel
 build_bootloader_images build/bootloader
 
-# boot.scr: rewrite the bootloader, then boot the installer kernel
+# boot.scr: erase the boot region (also latches the NAND-ID byte for detection),
+# rewrite the bootloader, then boot the installer kernel.
 mk_uboot_script build/boot.scr <<EOF
+echo == erasing CHIP boot region ==
+nand erase 0x0 0x1000000
 $(bootloader_write_cmds)
 echo == booting installer ==
 setenv bootargs '$BOOTARGS'
@@ -198,12 +145,13 @@ EOF
 
 echo ">> FEL loading"
 sunxi-fel -v -p uboot "$UBOOT" \
-  write 0x42000000      "$ZIMAGE" \
-  write 0x43000000      "$DTB" \
-  write 0x43100000      build/boot.scr \
-  write 0x43300000      "$INITRD" \
-  write "$SPLNAND_ADDR" "$SPLNAND" \
-  write "$UBOOT_ADDR"   "$UBOOTPAD"
+  write 0x42000000             "$ZIMAGE" \
+  write 0x43000000             "$DTB" \
+  write 0x43100000             build/boot.scr \
+  write 0x43300000             "$INITRD" \
+  write "$SPLNAND_HYNIX_ADDR"   "$SPLNAND_HYNIX" \
+  write "$SPLNAND_TOSHIBA_ADDR" "$SPLNAND_TOSHIBA" \
+  write "$UBOOT_ADDR"           "$UBOOTPAD"
 
 wait_for_device
 install_rootfs

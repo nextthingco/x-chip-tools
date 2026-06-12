@@ -16,8 +16,30 @@
 
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 
-FLAVOR=${1:?usage: update.sh <headless|gui>}
-case "$FLAVOR" in headless|gui) ;; *) echo "unknown flavor: $FLAVOR (want headless|gui)" >&2; exit 2 ;; esac
+usage() { echo "usage: update.sh [--flash-live|--flash-uboot|--flash-fastboot] <headless|gui>" >&2; exit "${1:-2}"; }
+
+# --flash-live (default): FEL-boot the installer initramfs + stream the rootfs
+#                         (flash-live.sh) -- works for any image size.
+# --flash-uboot:          build the UBIFS on the host + write it straight via
+#                         u-boot ubi writevol (flash-ubi.sh) -- no initramfs, but
+#                         DRAM-capped (~256 MiB), so headless only.
+# --flash-fastboot:       build a UBI image + flash it over USB fastboot
+#                         (flash-fastboot.sh) -- no initramfs, streamed so NOT
+#                         size-capped (GUI fits).
+MODE=live
+FLAVOR=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --flash-live)     MODE=live ;;
+    --flash-uboot)    MODE=uboot ;;
+    --flash-fastboot) MODE=fastboot ;;
+    headless|gui)     FLAVOR=$1 ;;
+    -h|--help)        usage 0 ;;
+    *)                echo "unknown arg: $1" >&2; usage ;;
+  esac
+  shift
+done
+[ -n "$FLAVOR" ] || usage
 
 OS_REPO=${OS_REPO:-nextthingco/x-chip-os}
 TOOLS_REPO=${TOOLS_REPO:-nextthingco/x-chip-tools}
@@ -110,16 +132,20 @@ else
   esac
 fi
 
-# ---- installer initrd (auto) ------------------------------------------------
+# ---- installer initrd (auto; live mode only) --------------------------------
+# The direct (--flash-uboot) path writes the rootfs straight from u-boot, so it
+# needs no installer initramfs.
 
 INITRD="$CACHE/initrd.uimage"
-ITAGFILE="$CACHE/installer.tag"
-itag=$(latest_tag "$TOOLS_REPO")
-if [ -n "$itag" ] && { [ ! -f "$INITRD" ] || [ "$itag" != "$(cat "$ITAGFILE" 2>/dev/null || true)" ]; }; then
-  download_asset "$TOOLS_REPO" "$itag" "initrd.uimage" "$CACHE"
-  printf '%s\n' "$itag" > "$ITAGFILE"
-elif [ ! -f "$INITRD" ]; then
-  echo "no installer initrd available (offline and none cached)" >&2; exit 1
+if [ "$MODE" = live ]; then
+  ITAGFILE="$CACHE/installer.tag"
+  itag=$(latest_tag "$TOOLS_REPO")
+  if [ -n "$itag" ] && { [ ! -f "$INITRD" ] || [ "$itag" != "$(cat "$ITAGFILE" 2>/dev/null || true)" ]; }; then
+    download_asset "$TOOLS_REPO" "$itag" "initrd.uimage" "$CACHE"
+    printf '%s\n' "$itag" > "$ITAGFILE"
+  elif [ ! -f "$INITRD" ]; then
+    echo "no installer initrd available (offline and none cached)" >&2; exit 1
+  fi
 fi
 
 # ---- u-boot blobs (auto) ----------------------------------------------------
@@ -137,12 +163,22 @@ elif [ ! -f "$UBOOT_DIR/u-boot-sunxi-with-spl.bin" ]; then
 fi
 
 # ---- flash ------------------------------------------------------------------
-# Hand flash.sh absolute cached paths (it cd's to its own dir, so relative paths
-# would break) via the env overrides it already honors.
+# Hand the flasher absolute cached paths (both cd to their own dir, so relative
+# paths would break) via the env overrides they already honor.
 
-echo ">> flashing $FLAVOR image into NAND"
 export UBOOT="$UBOOT_DIR/u-boot-sunxi-with-spl.bin"
 export SPL="$UBOOT_DIR/sunxi-spl.bin"
 export UBOOT_BIN="$UBOOT_DIR/u-boot-dtb.bin"
-export INITRD="$INITRD"
-exec "$HERE/flash.sh" "$ROOTFS"
+
+case "$MODE" in
+  uboot)
+    echo ">> flashing $FLAVOR image into NAND (direct u-boot UBI write)"
+    exec "$HERE/flash-ubi.sh" "$ROOTFS" ;;
+  fastboot)
+    echo ">> flashing $FLAVOR image into NAND (USB fastboot)"
+    exec "$HERE/flash-fastboot.sh" "$ROOTFS" ;;
+  *)
+    echo ">> flashing $FLAVOR image into NAND (live installer)"
+    export INITRD="$INITRD"
+    exec "$HERE/flash-live.sh" "$ROOTFS" ;;
+esac
