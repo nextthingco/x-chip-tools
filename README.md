@@ -24,30 +24,36 @@ the same way and auto-detect the NAND part (Hynix vs Toshiba).
 ./update.sh [--flash-live | --flash-uboot | --flash-fastboot] <headless|gui>
 ```
 
-| Mode | Flag | How the rootfs is written | Size limit | Needs |
+| Mode | Flag | How the rootfs is written | Image size | Status |
 | --- | --- | --- | --- | --- |
-| **Live installer** (default) | `--flash-live` | FEL-boots a dropbear initramfs, streams the rootfs tar over USB-net, runs `mkfs.ubifs` **on the device** | none | network gadget |
-| **Direct UBI** | `--flash-uboot` | Builds the UBIFS on the host, FEL-loads it into DRAM, u-boot `ubi writevol`s it | **~256 MiB** | root (mkfs) |
-| **Fastboot** | `--flash-fastboot` | Builds a `ubinize`'d UBI image, streams it over USB **fastboot** into the rootfs partition | none | root, `ubinize`, `fastboot` |
+| **Live installer** (default) | `--flash-live` | FEL-boots a dropbear initramfs, streams the rootfs tar over USB-net, runs `mkfs.ubifs` **on the device** | any | ✅ works (needs USB-net gadget) |
+| **Direct UBI** | `--flash-uboot` | Builds the UBIFS on the host (zlib), FEL-loads it into DRAM, u-boot `ubi writevol`s it | **≤ 232 MiB** | ✅ works (root for mkfs) |
+| **Fastboot** | `--flash-fastboot` | Builds a `ubinize`'d UBI image, streams it over USB fastboot to the rootfs partition | any | ❌ broken on the SLC rootfs (see below) |
 
 ### When to pick which
 
-- **`--flash-live` (default)** — the safe, general choice. No image-size limit, and
+- **`--flash-live` (default)** — the safe, general choice, **any image size**.
   `mkfs.ubifs` runs on the device so the kernel reports the real SLC geometry (no
-  host-side geometry guessing). Use this unless you have a reason not to. Requires
-  the installer initrd (fetched automatically).
+  host-side geometry guessing). Use this unless you have a reason not to — and it's
+  the **only** working path for the full headless (~303 MiB) and GUI images.
+  Requires the installer initrd (fetched automatically) + the USB-net gadget.
 - **`--flash-uboot`** — no initramfs, simplest path, but the whole UBIFS is staged
-  in DRAM for one `ubi writevol`, so it's capped at ~256 MiB (the window between
-  u-boot's load address and its relocated heap). **Headless only** — the GUI
-  rootfs won't fit. Good for quick headless reflashes.
-- **`--flash-fastboot`** — no initramfs *and* no size cap: fastboot streams the
-  image in ≤32 MiB sparse chunks, so the **GUI image fits**. Writes a full
-  `ubinize`'d UBI image raw into the rootfs MTD partition. Needs `ubinize`
-  (mtd-utils) and `fastboot` (android-tools-fastboot) on the host.
+  in DRAM for one `ubi writevol`, so it's capped at **232 MiB** (measured via
+  `bdinfo`: the window between u-boot's load address `0x4B000000` and its reserved
+  top RAM at `0x59f37758`). The host build uses **zlib** (`UBIFS_COMPR`) to pack
+  tighter. Good for quick **headless** reflashes that fit under the cap; it
+  hard-errors and points you here if the image is too big.
+- **`--flash-fastboot`** — ❌ **does not work on this rootfs, don't use it.**
+  Fastboot streams fine (no DRAM cap), but u-boot's `fb_nand` writes the
+  whole-chip NAND in plain **MLC** mode at the partition offset, bypassing our
+  **per-partition SLC** emulation — so the SLC-mode boot reads uncorrectable ECC
+  errors (`ubi_io_read error -74`) and won't mount. It's left in the tree for
+  reference / a future `fb_nand` (or u-boot SLC) patch. For large images use
+  `--flash-live`.
 
-> Host deps for the non-default modes: `--flash-uboot` and `--flash-fastboot`
-> build the filesystem image as **root** (to preserve ownership / setuid / device
-> nodes), so they use `sudo` for the extract + `mkfs.ubifs`/`ubinize` steps.
+> Host deps: `--flash-uboot` (and the parked `--flash-fastboot`) build the
+> filesystem image as **root** (to preserve ownership / setuid / device nodes),
+> so they `sudo` the extract + `mkfs.ubifs`/`ubinize` steps.
 
 ## Running a flasher directly
 
@@ -56,9 +62,9 @@ dirs (`../x-chip-uboot/build`, etc.) or `UBOOT`/`SPL`/`UBOOT_BIN`/`INITRD` env
 overrides:
 
 ```sh
-./flash-live.sh      <rootfs.tar.gz>   # live installer
-./flash-ubi.sh       <rootfs.tar.gz>   # direct UBI write (DRAM-capped)
-./flash-fastboot.sh  <rootfs.tar.gz>   # USB fastboot (streamed)
+./flash-live.sh      <rootfs.tar.gz>   # live installer (any size)
+./flash-ubi.sh       <rootfs.tar.gz>   # direct UBI write (<= 232 MiB)
+./flash-fastboot.sh  <rootfs.tar.gz>   # USB fastboot -- broken on SLC rootfs (ECC)
 ```
 
 `lib-nand.sh` (sourced by all three) builds the per-NAND-part SPL images and the
