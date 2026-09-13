@@ -1,7 +1,7 @@
 #!/bin/bash -e
 
 # Fetch the latest CHIP artifacts from GitHub releases and flash a flavor.
-#   ./update.sh <headless|gui|pocketchip>
+#   ./update.sh <headless|gui|pocketchip|alpine>
 #
 # Three per-repo releases feed a flash (see memory: flash-release-topology):
 #   - rootfs   <- nextthingco/x-chip-os     asset <flavor>-rootfs.tar.gz   (PROMPTED)
@@ -16,7 +16,7 @@
 
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 
-usage() { echo "usage: update.sh [--flash-live|--flash-uboot|--flash-fastboot] <headless|gui|pocketchip>" >&2; exit "${1:-2}"; }
+usage() { echo "usage: update.sh [--flash-live|--flash-uboot|--flash-fastboot] <headless|gui|pocketchip|alpine>" >&2; exit "${1:-2}"; }
 
 # --flash-live (default): FEL-boot the installer initramfs + stream the rootfs
 #                         (flash-live.sh) -- works for any image size.
@@ -33,7 +33,7 @@ while [ $# -gt 0 ]; do
     --flash-live)     MODE=live ;;
     --flash-uboot)    MODE=uboot ;;
     --flash-fastboot) MODE=fastboot ;;
-    headless|gui|pocketchip) FLAVOR=$1 ;;
+    headless|gui|pocketchip|alpine) FLAVOR=$1 ;;
     -h|--help)        usage 0 ;;
     *)                echo "unknown arg: $1" >&2; usage ;;
   esac
