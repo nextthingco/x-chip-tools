@@ -22,6 +22,27 @@ BOOTARGS=${BOOTARGS:-'console=ttyS0,115200'}            # partitions come from t
 # clear of u-boot's own >= 0x4A000000.
 source "$HERE/lib-nand.sh"
 
+need_cmd sunxi-fel sunxi-tools
+need_cmd sunxi-nand-image-builder sunxi-tools
+need_cmd mkimage u-boot-tools
+need_cmd ssh openssh-client
+need_cmd ping iputils-ping
+check_cmds
+
+[ -f "$ROOTFS_TAR" ] || { echo "ERROR: no such rootfs image: $ROOTFS_TAR" >&2; exit 1; }
+[ -f "$UBOOT" ] || {
+  echo "ERROR: no u-boot image at $UBOOT" >&2
+  echo "  Build it in ../x-chip-uboot, set UBOOT=<path>, or use ./update.sh," >&2
+  echo "  which fetches the u-boot blobs into .images/ for you." >&2
+  exit 1; }
+[ -f "$INITRD" ] || {
+  echo "ERROR: no installer initramfs at $INITRD" >&2
+  echo "  Build one with 'make' (needs docker), or point at the release copy" >&2
+  echo "  that ./update.sh caches:  INITRD=.images/initrd.uimage $0 $ROOTFS_TAR" >&2
+  exit 1; }
+
+fel_preflight
+
 # The installer boots on the SAME -chip kernel that's in the rootfs (apt-installed
 # during the live-build), so pull zImage + nand dtb straight out of $ROOTFS_TAR
 # -> $ZIMAGE, $DTB. No separate kernel artifact needed. Override ZIMAGE/DTB to

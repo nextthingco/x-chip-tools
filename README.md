@@ -1,80 +1,77 @@
 # x-chip-tools
 
-Host-side tooling to flash Debian onto a NextThing C.H.I.P.'s on-board NAND over
-FEL (USB), plus the installer initramfs build.
+Host-side tooling to flash a Linux image onto a NextThing C.H.I.P.'s on-board
+NAND over FEL (USB). One command fetches the latest image and writes it.
+
+## Requirements
+
+A Linux host (Debian or Ubuntu assumed below). Flashing happens over USB, so
+this doesn't work from a VM unless you can pass the USB device through.
+
+```sh
+sudo apt update && sudo apt install -y sunxi-tools u-boot-tools openssh-client iputils-ping curl
+```
+
+`sunxi-fel` talks to the CHIP over raw USB, which needs permission. Add a udev
+rule once, so you don't have to run the flasher as root:
+
+```sh
+echo 'SUBSYSTEM=="usb", ATTR{idVendor}=="1f3a", ATTR{idProduct}=="efe8", MODE="0660", TAG+="uaccess"' \
+  | sudo tee /etc/udev/rules.d/99-sunxi-fel.rules
+sudo udevadm control --reload
+```
+
+`TAG+="uaccess"` grants access to whoever is logged in at the console, which
+covers a normal desktop login. If your system doesn't do that (no systemd-logind,
+or you're over SSH), use a group instead — swap the rule's tag for
+`GROUP="plugdev"`, then add yourself and **log out and back in** for it to apply:
+
+```sh
+sudo usermod -aG plugdev "$USER"
+```
 
 ## Quick start
 
-```sh
-./update.sh <headless|gui|pocketchip>
-```
+1. **Power off** the CHIP and unplug it.
+2. **Jumper FEL to GND** — `U14_7` (FEL) to any ground pin, e.g. `U14_1`. A
+   paperclip or jumper wire is fine.
+3. **Connect the micro-USB port to your machine.** The CHIP powers up in FEL
+   mode and waits (no video output — that's expected).
+4. **Flash:**
+
+   ```sh
+   ./update.sh <headless|gui|pocketchip|alpine>
+   ```
+
+5. When it finishes, **unplug, remove the jumper**, and power back on.
 
 `update.sh` fetches the latest rootfs image (prompting before downloading a newer
 one), the installer initrd, and the u-boot blobs from their GitHub releases,
-caches them under `.images/`, then flashes. Jumper the CHIP into FEL mode (FEL pin
-to GND) and connect USB before running.
+caches them under `.images/`, then flashes. Re-running it later only downloads
+what changed.
 
-## Flashing modes
+Log in as `chip` / `chip`.
 
-`update.sh` (and the underlying scripts) support three ways to write the rootfs.
-They differ only in *how the rootfs lands on NAND*; all three write SPL + u-boot
-the same way and auto-detect the NAND part (Hynix vs Toshiba).
+## Troubleshooting
 
-```sh
-./update.sh [--flash-live | --flash-uboot | --flash-fastboot] <headless|gui|pocketchip>
-```
+- **`sunxi-fel` says it can't access the device / `LIBUSB_ERROR_ACCESS`** — the
+  udev rule above is missing or hasn't taken effect. Re-plug the CHIP after
+  reloading the rules.
+- **Nothing happens / no FEL device** — the jumper isn't making contact, or the
+  board was already powered when you connected it. Unplug, re-check the FEL-to-GND
+  jumper, plug back in. `lsusb` should list `1f3a:efe8` (Allwinner sunxi SoC OTG
+  connector in FEL mode).
+- **`gadget NIC never appeared`** — the live installer booted but its USB network
+  interface didn't come up on the host. Check `dmesg` for a `usb0`-style interface;
+  some network managers need a moment to configure it (the device runs its own
+  DHCP server, so no manual addressing).
+- **Flashing is slow** — expected. The rootfs streams over USB and is written to
+  raw NAND on a 1 GHz ARMv7; the GUI images take a while.
 
-| Mode | Flag | How the rootfs is written | Image size | Status |
-| --- | --- | --- | --- | --- |
-| **Live installer** (default) | `--flash-live` | FEL-boots a dropbear initramfs, streams the rootfs tar over USB-net, runs `mkfs.ubifs` **on the device** | any | ✅ works (needs USB-net gadget) |
-| **Direct UBI** | `--flash-uboot` | Builds the UBIFS on the host (zlib), FEL-loads it into DRAM, u-boot `ubi writevol`s it | **≤ 232 MiB** | ✅ works (root for mkfs) |
-| **Fastboot** | `--flash-fastboot` | Builds a `ubinize`'d UBI image, streams it over USB fastboot to the rootfs partition | any | ❌ broken on the SLC rootfs (see below) |
+## More
 
-### When to pick which
-
-- **`--flash-live` (default)** — the safe, general choice, **any image size**.
-  `mkfs.ubifs` runs on the device so the kernel reports the real SLC geometry (no
-  host-side geometry guessing). Use this unless you have a reason not to — and it's
-  the **only** working path for the full headless (~303 MiB) and GUI images.
-  Requires the installer initrd (fetched automatically) + the USB-net gadget.
-- **`--flash-uboot`** — no initramfs, simplest path, but the whole UBIFS is staged
-  in DRAM for one `ubi writevol`, so it's capped at **232 MiB** (measured via
-  `bdinfo`: the window between u-boot's load address `0x4B000000` and its reserved
-  top RAM at `0x59f37758`). The host build uses **zlib** (`UBIFS_COMPR`) to pack
-  tighter. Good for quick **headless** reflashes that fit under the cap; it
-  hard-errors and points you here if the image is too big.
-- **`--flash-fastboot`** — ❌ **does not work on this rootfs, don't use it.**
-  Fastboot streams fine (no DRAM cap), but u-boot's `fb_nand` writes the
-  whole-chip NAND in plain **MLC** mode at the partition offset, bypassing our
-  **per-partition SLC** emulation — so the SLC-mode boot reads uncorrectable ECC
-  errors (`ubi_io_read error -74`) and won't mount. It's left in the tree for
-  reference / a future `fb_nand` (or u-boot SLC) patch. For large images use
-  `--flash-live`.
-
-> Host deps: `--flash-uboot` (and the parked `--flash-fastboot`) build the
-> filesystem image as **root** (to preserve ownership / setuid / device nodes),
-> so they `sudo` the extract + `mkfs.ubifs`/`ubinize` steps.
-
-## Running a flasher directly
-
-The flashers also work standalone on a local `rootfs.tar.gz`, using sibling build
-dirs (`../x-chip-uboot/build`, etc.) or `UBOOT`/`SPL`/`UBOOT_BIN`/`INITRD` env
-overrides:
-
-```sh
-./flash-live.sh      <rootfs.tar.gz>   # live installer (any size)
-./flash-ubi.sh       <rootfs.tar.gz>   # direct UBI write (<= 232 MiB)
-./flash-fastboot.sh  <rootfs.tar.gz>   # USB fastboot -- broken on SLC rootfs (ECC)
-```
-
-`lib-nand.sh` (sourced by all three) builds the per-NAND-part SPL images and the
-NAND-type detection that selects the right one at flash time.
-
-## Building the installer initramfs
-
-```sh
-make            # -> build/initrd.uimage (used by the live-installer path)
-```
-
-A push to the default branch publishes `initrd.uimage` as a GitHub release
-(`installer-<date>`), which `update.sh --flash-live` consumes.
+- **[ADVANCED_FLASHING.md](ADVANCED_FLASHING.md)** — the three flashing modes and
+  when to use each, flashing a locally built image, and rebuilding the installer
+  initramfs.
+- u-boot and the images themselves live in the sibling `x-chip-uboot` / `x-chip-os`
+  repos.

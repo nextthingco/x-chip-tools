@@ -21,6 +21,15 @@
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 source "$HERE/lib-nand.sh"
 
+need_cmd sunxi-fel sunxi-tools
+need_cmd sunxi-nand-image-builder sunxi-tools
+need_cmd mkimage u-boot-tools
+need_cmd ubinize mtd-utils
+need_cmd mkfs.ubifs mtd-utils
+need_cmd fastboot fastboot
+check_cmds
+fel_preflight
+
 ROOTFS_TAR=${1:?usage: flash-fastboot.sh <rootfs.tar[.gz]>}
 
 UBOOT=${UBOOT:-../x-chip-uboot/build/u-boot/u-boot-sunxi-with-spl.bin}

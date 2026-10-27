@@ -2,6 +2,62 @@
 # Sourced by flash-live.sh (live-installer) and flash-ubi.sh (direct UBI write).
 # Pure functions + DRAM staging-address constants; no side effects on source.
 
+# ---- host preflight ---------------------------------------------------------
+# Fail before touching the board, with the exact apt line, instead of dying
+# halfway through a flash on a missing tool. Package names are Debian/Ubuntu
+# (see README.md -> Requirements).
+
+_MISSING_CMDS=""
+_MISSING_PKGS=""
+
+# need_cmd <command> <debian package>   -- queue it if absent
+need_cmd() {
+  command -v "$1" >/dev/null 2>&1 && return 0
+  _MISSING_CMDS="$_MISSING_CMDS $1"
+  case " $_MISSING_PKGS " in
+    *" $2 "*) ;;
+    *) _MISSING_PKGS="$_MISSING_PKGS $2" ;;
+  esac
+}
+
+# check_cmds   -- report everything queued by need_cmd, then bail
+check_cmds() {
+  [ -z "$_MISSING_CMDS" ] && return 0
+  echo "ERROR: missing required tool(s):$_MISSING_CMDS" >&2
+  echo "  install with: sudo apt update && sudo apt install -y$_MISSING_PKGS" >&2
+  echo "  (see README.md -> Requirements)" >&2
+  exit 1
+}
+
+# The CHIP in FEL mode enumerates as 1f3a:efe8. Read sysfs rather than shelling
+# out to lsusb, so usbutils isn't a dependency just to produce a good error.
+_fel_usb_present() {
+  local d
+  for d in /sys/bus/usb/devices/*; do
+    [ -r "$d/idVendor" ] && [ -r "$d/idProduct" ] || continue
+    [ "$(cat "$d/idVendor")" = "1f3a" ] && [ "$(cat "$d/idProduct")" = "efe8" ] && return 0
+  done
+  return 1
+}
+
+# fel_preflight  -- confirm a CHIP is in FEL mode AND we can open it
+fel_preflight() {
+  sunxi-fel ver >/dev/null 2>&1 && return 0
+  echo "ERROR: can't talk to a CHIP in FEL mode." >&2
+  if _fel_usb_present; then
+    echo "  The board IS connected (USB 1f3a:efe8), but sunxi-fel can't open it." >&2
+    echo "  That's a permissions problem: install the udev rule from README.md" >&2
+    echo "  (Requirements), then unplug and re-plug the CHIP." >&2
+  else
+    echo "  No FEL device found (expected USB 1f3a:efe8). Check that:" >&2
+    echo "    - the FEL pin (U14_7) is jumpered to GND (e.g. U14_1)," >&2
+    echo "    - the jumper was in place BEFORE you connected USB," >&2
+    echo "    - you are using the micro-USB port, not the full-size one." >&2
+    echo "  Then unplug, re-check the jumper, and plug back in." >&2
+  fi
+  exit 1
+}
+
 # DRAM staging addresses for the bootloader blobs. Both flashers FEL-load the
 # two SPL variants + the padded u-boot here; kept clear of each flasher's own
 # payload and of u-boot's load/relocation region (>= 0x4A000000).

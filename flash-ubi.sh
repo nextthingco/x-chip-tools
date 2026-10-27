@@ -18,9 +18,24 @@
 HERE=$(cd "$(dirname "$0")" && pwd); cd "$HERE"
 source "$HERE/lib-nand.sh"
 
+need_cmd sunxi-fel sunxi-tools
+need_cmd sunxi-nand-image-builder sunxi-tools
+need_cmd mkimage u-boot-tools
+need_cmd mkfs.ubifs mtd-utils
+need_cmd sudo sudo
+check_cmds
+
 ROOTFS_TAR=${1:?usage: flash-ubi.sh <rootfs.tar[.gz]>}
 
 UBOOT=${UBOOT:-../x-chip-uboot/build/u-boot/u-boot-sunxi-with-spl.bin}
+
+[ -f "$ROOTFS_TAR" ] || { echo "ERROR: no such rootfs image: $ROOTFS_TAR" >&2; exit 1; }
+[ -f "$UBOOT" ] || {
+  echo "ERROR: no u-boot image at $UBOOT" >&2
+  echo "  Build it in ../x-chip-uboot, set UBOOT=<path>, or use ./update.sh." >&2
+  exit 1; }
+
+fel_preflight
 
 # UBIFS image staging in DRAM (512 MiB, 0x40000000-0x60000000). The buffer goes
 # ABOVE the FEL-staged bootloader blobs + u-boot's load image at 0x4A000000

@@ -41,6 +41,18 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$FLAVOR" ] || usage
 
+# Host preflight: check the tools this path needs (and that a board is actually
+# in FEL mode) BEFORE downloading a few hundred MB. Mode-specific extras --
+# mtd-utils for --flash-uboot, fastboot for --flash-fastboot -- are checked by
+# the flasher itself.
+source "$HERE/lib-nand.sh"
+need_cmd curl curl
+need_cmd sunxi-fel sunxi-tools
+need_cmd sunxi-nand-image-builder sunxi-tools
+need_cmd mkimage u-boot-tools
+check_cmds
+fel_preflight
+
 OS_REPO=${OS_REPO:-nextthingco/x-chip-os}
 TOOLS_REPO=${TOOLS_REPO:-nextthingco/x-chip-tools}
 UBOOT_REPO=${UBOOT_REPO:-nextthingco/x-chip-uboot}
