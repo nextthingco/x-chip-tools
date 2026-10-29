@@ -58,6 +58,36 @@ fel_preflight() {
   exit 1
 }
 
+# fel_uboot <uboot-image> [write <addr> <file> ...]
+# Wrapper for `sunxi-fel -v -p uboot ...` that refuses to continue if sunxi-fel
+# was too old to hand our boot script over to u-boot.
+#
+# sunxi-fel passes the boot.scr address to u-boot by poking fel_script_address
+# in the live SPL header (-> ${fel_scriptaddr}, which the stock sunxi bootcmd
+# sources), but only when its have_sunxi_spl() accepts the header's version
+# byte. Our SPL ships 0x02 and then promotes itself to 0x03 at runtime once it
+# records the detected DRAM size (board/sunxi/board.c, sunxi_spl_store_dram_size),
+# and sunxi-tools only raised SPL_MAX_VERSION past 2 in 2021. An older fel prints
+# "sunxi SPL version mismatch", skips the handoff, and u-boot then starts, ignores
+# our script and boots NAND -- which surfaces much later as a flasher timeout
+# ("gadget NIC never appeared") with nothing erased or written. Catch it here.
+fel_uboot() {
+  local log rc
+  log=$(mktemp)
+  sunxi-fel -v -p uboot "$@" 2>&1 | tee "$log"
+  rc=${PIPESTATUS[0]}
+  if grep -q "SPL version mismatch" "$log"; then
+    rm -f "$log"
+    echo "" >&2
+    echo "ERROR: this sunxi-fel is too old to flash the CHIP. Nothing was written." >&2
+    echo "  Build and install sunxi-tools from upstream git (see README.md ->" >&2
+    echo "  Requirements), then re-run this." >&2
+    exit 1
+  fi
+  rm -f "$log"
+  [ "$rc" -eq 0 ] || exit "$rc"
+}
+
 # DRAM staging addresses for the bootloader blobs. Both flashers FEL-load the
 # two SPL variants + the padded u-boot here; kept clear of each flasher's own
 # payload and of u-boot's load/relocation region (>= 0x4A000000).

@@ -165,7 +165,7 @@ bootz 0x42000000 0x43300000 0x43000000
 EOF
 
 echo ">> FEL loading"
-sunxi-fel -v -p uboot "$UBOOT" \
+fel_uboot "$UBOOT" \
   write 0x42000000             "$ZIMAGE" \
   write 0x43000000             "$DTB" \
   write 0x43100000             build/boot.scr \

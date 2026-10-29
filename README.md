@@ -12,6 +12,21 @@ this doesn't work from a VM unless you can pass the USB device through.
 sudo apt update && sudo apt install -y sunxi-tools u-boot-tools openssh-client iputils-ping curl
 ```
 
+**`sunxi-tools` must be reasonably recent.** Debian 12+ / Ubuntu 22.04+ package a
+new enough snapshot. Older packages — and the tagged 1.4.2 release that most
+non-Debian distros ship — can't hand the boot script to u-boot, so the flash
+quietly does nothing; the flashers detect this and stop. Every build calls itself
+`v1.4.2`, so you can't tell from the version string. If yours is too old, build
+from upstream git:
+
+```sh
+sudo apt install -y build-essential git pkg-config libusb-1.0-0-dev libz-dev libfdt-dev
+git clone https://github.com/linux-sunxi/sunxi-tools
+make -C sunxi-tools && sudo make -C sunxi-tools install
+```
+
+That installs into `/usr/local/bin`, ahead of any packaged copy.
+
 `sunxi-fel` talks to the CHIP over raw USB, which needs permission. Add a udev
 rule once, so you don't have to run the flasher as root:
 
@@ -61,6 +76,10 @@ Log in as `chip` / `chip`.
   board was already powered when you connected it. Unplug, re-check the FEL-to-GND
   jumper, plug back in. `lsusb` should list `1f3a:efe8` (Allwinner sunxi SoC OTG
   connector in FEL mode).
+- **`this sunxi-fel is too old to flash the CHIP`** — your `sunxi-tools` predates
+  SPL header version 3 (2021), so `sunxi-fel` refused to tell u-boot where the boot
+  script was and the board just booted its existing NAND image. Nothing was erased.
+  Build from upstream git (see Requirements above).
 - **`gadget NIC never appeared`** — the live installer booted but its USB network
   interface didn't come up on the host. Check `dmesg` for a `usb0`-style interface;
   some network managers need a moment to configure it (the device runs its own

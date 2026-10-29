@@ -143,7 +143,7 @@ for chunk in build/ubichunk.*; do
 done
 
 echo ">> FEL loading (${#rootfs_writes[@]} args; rootfs in $(( (UBIFS_SIZE + FEL_CHUNK - 1) / FEL_CHUNK )) chunks)"
-sunxi-fel -v -p uboot "$UBOOT" \
+fel_uboot "$UBOOT" \
   write 0x43100000             build/boot.scr \
   write "$SPLNAND_HYNIX_ADDR"   "$SPLNAND_HYNIX" \
   write "$SPLNAND_TOSHIBA_ADDR" "$SPLNAND_TOSHIBA" \

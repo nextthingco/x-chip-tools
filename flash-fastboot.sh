@@ -139,7 +139,7 @@ fastboot usb 0
 EOF
 
 echo ">> FEL loading"
-sunxi-fel -v -p uboot "$UBOOT" \
+fel_uboot "$UBOOT" \
   write "$SCRIPT_ADDR"          build/boot.scr \
   write "$SPLNAND_HYNIX_ADDR"   "$SPLNAND_HYNIX" \
   write "$SPLNAND_TOSHIBA_ADDR" "$SPLNAND_TOSHIBA" \
